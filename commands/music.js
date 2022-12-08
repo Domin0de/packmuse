@@ -5,7 +5,7 @@ const yts = require("yt-search");
 
 const ytIdGrab = /^.*(?:(?:youtu\.be\/|v\/|vi\/|u\/\w\/|embed\/|shorts\/)|(?:(?:watch)?\?v(?:i)?=|\&v(?:i)?=))([^#\&\?]*).*/;
 
-const servers = require("../commands/music").servers;
+const servers = require("../events/musicloop").servers;
 
 /**
  * Format: servers = {
@@ -306,6 +306,7 @@ module.exports = {
                 await interaction.reply(ephemeralError);
             }
         } else if (interaction.options.getSubcommand() === "loop") {
+            // Toggles looping for queue
             if (serverData.looped) {
                 serverData.looped = false;
                 const successMsg = "The queue is no longer looping.";
@@ -318,7 +319,7 @@ module.exports = {
         } else if (interaction.options.getSubcommand() === "move") {
             const oldIndex = interaction.options.getInteger("cur_pos");
             const newIndex = interaction.options.getInteger("new_pos");
-            // Consider order to make this work effectively and clearly!
+            // Moves song given valid positions
             if (serverData.queue.length < oldIndex || oldIndex <= 1) {
                 const ephemeralError = { content: `There is no movable song in initial position \`${oldIndex}\`.`, ephemeral: true };
 
