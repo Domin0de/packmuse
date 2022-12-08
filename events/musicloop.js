@@ -31,7 +31,7 @@ module.exports = {
                     }
                 }
             } catch (err) {
-                console.log("An error occured in standupReset.js " + err);
+                console.log("An error occured in musicloop.js " + err);
             }
         }, 500);
     },

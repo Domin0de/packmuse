@@ -1,0 +1,27 @@
+{
+  "name": "packmuse",
+  "version": "1.0.0",
+  "description": "PackMuse Discord Bot\r - Authored by Wolfdragon24 in Javascript (discord.js)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wolfdragon24/packmuse.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Wolfdragon24/packmuse/issues"
+  },
+  "homepage": "https://github.com/Wolfdragon24/packmuse#readme",
+  "dependencies": {
+    "@discordjs/builders": "^1.4.0",
+    "@discordjs/voice": "^0.14.0",
+    "discord.js": "^14.7.1",
+    "dotenv": "^16.0.3",
+    "yt-search": "^2.10.3",
+    "ytdl-core": "^4.11.2"
+  }
+}

@@ -56,12 +56,12 @@ module.exports = {
             subcommand
                 .setName("play")
                 .setDescription("Plays a song, from a url or search, if no song is playing or adds a song to the queue.")
-                .setStringOption(option => option.setName("song").setDescription("Song input to play").setRequired(true)))
+                .addStringOption(option => option.setName("song").setDescription("Song input to play").setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName("queue")
                 .setDescription("Displays the current queue.")
-                .setIntegerOption(option => option.setName("page").setDescription("Requested page of the queue")))
+                .addIntegerOption(option => option.setName("page").setDescription("Requested page of the queue")))
         .addSubcommand(subcommand =>
             subcommand
                 .setName("pause")
@@ -82,17 +82,17 @@ module.exports = {
             subcommand
                 .setName("playnext")
                 .setDescription("Adds a song, from url or search, to the beginning of the queue.")
-                .setStringOption(option => option.setName("song").setDescription("Song input to play").setRequired(true)))
+                .addStringOption(option => option.setName("song").setDescription("Song input to play").setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName("playnow")
                 .setDescription("Plays a song, from url or search, and pushes the current song back into the queue.")
-                .setStringOption(option => option.setName("song").setDescription("Song input to play").setRequired(true)))
+                .addStringOption(option => option.setName("song").setDescription("Song input to play").setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName("remove")
                 .setDescription("Removes a song from the current queue by position.")
-                .setIntegerOption(option => option.setName("remove_pos").setDescription("Position to remove the song from").setRequired(true)))
+                .addIntegerOption(option => option.setName("remove_pos").setDescription("Position to remove the song from").setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName("shuffle")
@@ -105,8 +105,8 @@ module.exports = {
             subcommand
                 .setName("move")
                 .setDescription("Moves a song into another position in the queue.")
-                .setIntegerOption(option => option.setName("cur_pos").setDescription("Position of song to be moved").setRequired(true))
-                .setIntegerOption(option => option.setName("new_pos").setDescription("Target position for the moved song").setRequired(true))),
+                .addIntegerOption(option => option.setName("cur_pos").setDescription("Position of song to be moved").setRequired(true))
+                .addIntegerOption(option => option.setName("new_pos").setDescription("Target position for the moved song").setRequired(true))),
 
     async execute(interaction) {
         const guildId = interaction.guildId;
