@@ -1,8 +1,9 @@
-const { SlashCommandBuilder } = require("@discordjs/builders");
 const { joinVoiceChannel, getVoiceConnection, createAudioPlayer } = require("@discordjs/voice");
 const ytdl = require("ytdl-core");
 const yts = require("yt-search");
+const { SlashCommandBuilder, EmbedBuilder, Embed } = require("discord.js");
 
+const successHex = 0x7ae378;
 const ytIdGrab = /^.*(?:(?:youtu\.be\/|v\/|vi\/|u\/\w\/|embed\/|shorts\/)|(?:(?:watch)?\?v(?:i)?=|\&v(?:i)?=))([^#\&\?]*).*/;
 
 const servers = require("../events/musicloop").servers;
@@ -38,6 +39,7 @@ const servers = require("../events/musicloop").servers;
  * - shuffle
  * - loop
  * - move
+ * - nowplaying
  */
 
 module.exports = {
@@ -106,16 +108,22 @@ module.exports = {
                 .setName("move")
                 .setDescription("Moves a song into another position in the queue.")
                 .addIntegerOption(option => option.setName("cur_pos").setDescription("Position of song to be moved").setRequired(true))
-                .addIntegerOption(option => option.setName("new_pos").setDescription("Target position for the moved song").setRequired(true))),
+                .addIntegerOption(option => option.setName("new_pos").setDescription("Target position for the moved song").setRequired(true)))
+        .addSubcommand(subcommand => 
+            subcommand
+                .setName("nowplaying")
+                .setDescription("Displays the currently playing song.")),
 
     async execute(interaction) {
         const guildId = interaction.guildId;
         const channelType = interaction.channel.type;
         const userVoiceChannel = interaction.member.voice.channel;
-        const connection = getVoiceConnection(guildId);
+        let connection = getVoiceConnection(guildId);
         let serverData = servers[guildId];
+        const voiceState = interaction.guild.members.me.voice;
 
-        if (channelType != "GUILD_TEXT") {
+        // Guild Text Type = 0
+        if (channelType != 0) {
             const ephemeralError = { content: "You cannot use this command in this channel, please try again in a server text channel.", ephemeral: true };
 
             await interaction.reply(ephemeralError);
@@ -136,6 +144,10 @@ module.exports = {
                 const success = { content: "The bot has joined your voice channel.", ephemeral: false };
 
                 await interaction.reply(success);
+            } else if (voiceState.channelId === userVoiceChannel.id) {
+                const ephemeralError = { content: "The bot is already in your voice channel.", ephemeral: true };
+
+                await interaction.reply(ephemeralError);
             } else {
                 const ephemeralError = { content: "The bot is currently playing music in another voice channel, please try later.", ephemeral: true };
 
@@ -143,15 +155,23 @@ module.exports = {
             }
         } else if (interaction.options.getSubcommand() === "leave") {
             // Leaves vc if in vc
-            if (guildId in servers) {
+            if (guildId in servers || connection) {
                 // Unsubscribes from audio player and removes, if existent
-                if (serverData.subscription !== undefined) {
+                if (serverData && serverData.subscription !== undefined) {
                     serverData.subscription.unsubscribe();
                     serverData.subscription.player.stop();
                 }
 
                 connection.destroy();
-                delete servers[guildId];
+                if (guildId in servers) {
+                    delete servers[guildId];
+                }
+
+                const success = { content: "The bot has left your voice channel.", ephemeral: false };
+
+                await interaction.reply(success);
+            } else if (voiceState.channelId) {
+                voiceState.disconnect();
 
                 const success = { content: "The bot has left your voice channel.", ephemeral: false };
 
@@ -168,11 +188,12 @@ module.exports = {
             if (!connection) {
                 startConnection(interaction, userVoiceChannel);
                 serverData = servers[guildId];
+                connection = getVoiceConnection(guildId);
             }
 
             // Gets information from play command and appends inputted song
-            const { foundSong, stream } = await generateSong(interaction);
-            serverData.queue.push({ foundSong, stream });
+            const { foundSong, stream, requester } = await generateSong(interaction);
+            serverData.queue.push({ foundSong, stream, requester });
 
             // Subscribes an audio player, if not existent
             if (!serverData.subscription) {
@@ -185,9 +206,34 @@ module.exports = {
 
             await interaction.editReply(successMsg);
         } else if (interaction.options.getSubcommand() === "queue") {
-            if (serverData.queue.length === 0) {
-                // TODO - requires queue pagination
-                console.log("queue");
+            if (serverData && serverData.queue.length > 1) {
+                const queue = serverData.queue.slice(1);
+                let reqPage = interaction.options.getInteger("page");
+                const maxPages = Math.ceil(queue.length / 10);
+
+                if (reqPage === null) {
+                    reqPage = 1;
+                } else if (reqPage > maxPages || reqPage < 1) {
+                    reqPage = Math.max(maxPages - 1, 1);
+                }
+
+                const reqSongIndex = (reqPage - 1) * 10
+                const queueItems = queue.slice(reqSongIndex, reqSongIndex + 10);
+
+                const queueEmbed = new EmbedBuilder({
+                    title: `Queue - ${reqPage}/${maxPages}`,
+                    color: successHex,
+                    fields: queueItems.map((songData, index) => ({
+                        name: `${reqSongIndex + index + 1}. ${songData.foundSong.title}`,
+                        value: `Requested by ${songData.requester}`,
+                    })),
+                });
+
+                await interaction.reply({ embeds: [queueEmbed] });
+            } else {
+                const ephemeralError = { content: "There are no items to display in the queue.", ephemeral: true };
+
+                await interaction.reply(ephemeralError);
             }
         } else if (interaction.options.getSubcommand() === "pause") {
             if (serverData.queue.length !== 0) {
@@ -237,12 +283,13 @@ module.exports = {
             if (!connection) {
                 startConnection(interaction, userVoiceChannel);
                 serverData = servers[guildId];
+                connection = getVoiceConnection(guildId);
             }
 
             // Gets information from play command and appends inputted song
-            const { foundSong, stream } = await generateSong(interaction);
+            const { foundSong, stream, requester } = await generateSong(interaction);
             // Adds to the second position in the queue
-            serverData.queue.splice(1, 0, { foundSong, stream });
+            serverData.queue.splice(1, 0, { foundSong, stream, requester });
 
             // Subscribes an audio player, if not existent
             if (!serverData.subscription) {
@@ -260,12 +307,13 @@ module.exports = {
             if (!connection) {
                 startConnection(interaction, userVoiceChannel);
                 serverData = servers[guildId];
+                connection = getVoiceConnection(guildId);
             }
 
             // Gets information from play command and appends inputted song
-            const { foundSong, stream } = await generateSong(interaction);
+            const { foundSong, stream, requester } = await generateSong(interaction);
             // Adds to the start of the queue
-            serverData.queue.unshift({ foundSong, stream });
+            serverData.queue.unshift({ foundSong, stream, requester });
 
             // Subscribes an audio player, if not existent
             if (!serverData.subscription) {
@@ -310,11 +358,11 @@ module.exports = {
             if (serverData.looped) {
                 serverData.looped = false;
                 const successMsg = "The queue is no longer looping.";
-                await interaction.editReply(successMsg);
+                await interaction.reply(successMsg);
             } else {
                 serverData.looped = true;
                 const successMsg = "The queue is now looping.";
-                await interaction.editReply(successMsg);
+                await interaction.reply(successMsg);
             }
         } else if (interaction.options.getSubcommand() === "move") {
             const oldIndex = interaction.options.getInteger("cur_pos");
@@ -333,7 +381,36 @@ module.exports = {
                 serverData.queue.splice(newIndex - 1, 0, moved);
 
                 const successMsg = `Moved \`${moved.title}\` from position \`${oldIndex}\` to position \`${newIndex}\` of the queue.`;
-                await interaction.editReply(successMsg);
+                await interaction.reply(successMsg);
+            }
+        } else if (interaction.options.getSubcommand() === "nowplaying") {
+            const nowPlaying = serverData.queue[0];
+            const currentSong = nowPlaying.foundSong;
+
+            if (currentSong) {
+                const songUrl = currentSong.url;
+                const songTitle = currentSong.title;
+                const songArtist = currentSong.author.name;
+                const songThumbnail = currentSong.thumbnail;
+                const songLength = currentSong.duration.timestamp;
+                const requester = nowPlaying.requester;
+
+                const targetChannel = client.channels.cache.find(channel => channel.id === server.channel);
+                const playingMessage = new EmbedBuilder()
+                    .setColor(successHex)
+                    .setAuthor({ name: songArtist })
+                    .setTitle(songTitle)
+                    .setURL(songUrl)
+                    .setThumbnail(songThumbnail)
+                    .addFields(
+                        { name: "Duration", value: String(songLength) },
+                        { name: "Requested by", value: String(requester) },
+                    );
+                const successMsg = `Moved \`${moved.title}\` from position \`${oldIndex}\` to position \`${newIndex}\` of the queue.`;
+                await interaction.reply(successMsg);
+            } else {
+                const successMsg = "There is no song currently playing.";
+                await interaction.reply(successMsg);
             }
         }
     },
@@ -342,7 +419,7 @@ module.exports = {
 // Fetches song details and stream from input song
 async function generateSong(interaction) {
     const songInput = interaction.options.getString("song");
-    const requester = interaction.member.displayName;
+    const requester = `${interaction.user.username}#${interaction.user.discriminator}`;
 
     let songSearch;
     if (!(songInput.includes("youtube.com") || songInput.includes("youtu.be"))) {

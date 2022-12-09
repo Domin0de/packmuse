@@ -1,6 +1,7 @@
-const { MessageEmbed } = require("discord.js");
-const successHex = 0x7ae378;
+const { EmbedBuilder } = require("discord.js");
 const { createAudioResource } = require("@discordjs/voice");
+
+const successHex = 0x7ae378;
 
 /**
  * Format: servers = {
@@ -24,7 +25,7 @@ module.exports = {
     execute(client) {
         setInterval(async () => {
             try {
-                for (const guildId in Object.keys(servers)) {
+                for (const guildId of Object.keys(servers)) {
                     const server = servers[guildId];
                     if (server.queue.length > 0 && server.playing === false) {
                         playNext(server, client);
@@ -53,19 +54,19 @@ async function playNext(server, client) {
     const requester = nowPlaying.requester;
 
     const targetChannel = client.channels.cache.find(channel => channel.id === server.channel);
-    const playingMessage = new MessageEmbed()
+    const playingMessage = new EmbedBuilder()
         .setColor(successHex)
         .setAuthor({ name: songArtist })
         .setTitle(songTitle)
         .setURL(songUrl)
         .setThumbnail(songThumbnail)
         .addFields(
-            { name: "Duration", value: songLength },
+            { name: "Duration", value: String(songLength) },
             { name: "Requested by", value: requester },
         );
 
     const songResource = createAudioResource(stream);
-    server.player.play(songResource);
+    server.subscription.player.play(songResource);
 
     const sentMessage = await targetChannel.send({ embeds: [playingMessage] });
 
