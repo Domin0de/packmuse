@@ -12,8 +12,10 @@ const successHex = 0x7ae378;
  *      {foundSong, stream, requester}
  *    ],
  *    playing: boolean,
+ *    stopped: boolean,
+ *    paused: boolean,
  *    looped: boolean,
- *    channel: channelId
+ *    channel: channelId,
  *  }
  * };
 */
@@ -27,8 +29,8 @@ module.exports = {
             try {
                 for (const guildId of Object.keys(servers)) {
                     const server = servers[guildId];
-                    if (server.queue.length > 0 && server.playing === false) {
-                        playNext(server, client);
+                    if (server.queue.length > 0 && server.playing === false && server.stopped === false && server.paused === false) {
+                        await playNext(server, client);
                     }
                 }
             } catch (err) {
@@ -65,17 +67,34 @@ async function playNext(server, client) {
             { name: "Requested by", value: requester },
         );
 
+    if (!stream) stream = await dlStream(foundSong.url);
+
     const songResource = createAudioResource(stream);
-    server.subscription.player.play(songResource);
+    server.subscription.player.play(songResource, { type: 'opus' });
 
     const sentMessage = await targetChannel.send({ embeds: [playingMessage] });
 
-    await sleep(foundSong.duration.seconds * 1000 + 10);
+    let count = 0;
+    const total = foundSong.duration.seconds * 1000 + 10;
+    while (count < total) {
+        const nextTimeout = (total - count) > 1000 ? 1000 : 10;
+        await sleep(nextTimeout);
+        if (server.playing) count += 1000;
+        if (server.stopped) return;
+    }
 
     if (server.queue[0] === nowPlaying) {
         const removed = server.queue.shift();
+
         if (server.looped) {
-            server.queue.push(removed);
+            const toLoop = {
+                foundSong: removed,
+                stream: await dlStream(foundSong.url),
+                requester: removed.requester,
+                url: removed.url
+            }
+
+            server.queue.push(toLoop);
         }
         sentMessage.delete()
             .catch(console.error);
@@ -85,4 +104,16 @@ async function playNext(server, client) {
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function dlStream(url) {
+    return await ytdl(url, {
+        filter: 'audioonly',
+        fmt: 'mp3',
+        highWaterMark: 1 << 30,
+        liveBuffer: 20000,
+        dlChunkSize: 0,
+        bitrate: 128,
+        quality: 'lowestaudio'
+    });
 }

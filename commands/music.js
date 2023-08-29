@@ -1,20 +1,32 @@
 const { joinVoiceChannel, getVoiceConnection, createAudioPlayer } = require("@discordjs/voice");
-const ytdl = require("ytdl-core");
+const ytdl = require("ytdl-core-discord");
 const yts = require("yt-search");
+const ytlist = require('youtube-playlist');
+const spotifyApi = require('spotify-web-api-node');
 const { SlashCommandBuilder, EmbedBuilder, Embed } = require("discord.js");
+
+const spotify = new spotifyApi({
+    clientId: process.env.SPOTIFY_CLIENT_ID,
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET
+  });
 
 const successHex = 0x7ae378;
 const ytIdGrab = /^.*(?:(?:youtu\.be\/|v\/|vi\/|u\/\w\/|embed\/|shorts\/)|(?:(?:watch)?\?v(?:i)?=|\&v(?:i)?=))([^#\&\?]*).*/;
+const spotifyTrackIdGrab = /https:\/\/open\.spotify\.com\/track\/([\w\d]+)\??/;
+const spotifyPlaylistIdGrab = /https:\/\/open\.spotify\.com\/playlist\/([\w\d]+)\??/;
+const spotifyAlbumIdGrab = /https:\/\/open\.spotify\.com\/album\/([\w\d]+)\??/;
 
 const servers = require("../events/musicloop").servers;
+
+updateToken()
 
 /**
  * Format: servers = {
  *  guildId: {
  *    subscription: subscriptionObj,
  *    queue: [
- *      {foundSong, stream, requester},
- *      {foundSong, stream, requester}
+ *      {foundSong, stream, requester, url},
+ *      {foundSong, stream, requester, url}
  *    ],
  *    playing: boolean,
  *    looped: boolean,
@@ -25,21 +37,22 @@ const servers = require("../events/musicloop").servers;
 // Loop that checks if there is something in the queue when run and plays it if there is something and playing is false, otherwise waits?
 
 /** Music Features
- * - join
- * - leave
- * - play
+ * - join *
+ * - leave *
+ * - play *
  * - queue
- * - pause
- * - resume
- * - stop
- * - clear
+ * - pause *
+ * - resume *
+ * - stop *
+ * - clear *
  * - playnext
  * - playnow
  * - remove
  * - shuffle
  * - loop
  * - move
- * - nowplaying
+ * - nowplaying *
+ * - skip *
  */
 
 module.exports = {
@@ -112,7 +125,11 @@ module.exports = {
         .addSubcommand(subcommand => 
             subcommand
                 .setName("nowplaying")
-                .setDescription("Displays the currently playing song.")),
+                .setDescription("Displays the currently playing song."))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName("skip")
+                .setDescription("Skips the current song.")),
 
     async execute(interaction) {
         const guildId = interaction.guildId;
@@ -160,12 +177,12 @@ module.exports = {
                 if (serverData && serverData.subscription !== undefined) {
                     serverData.subscription.unsubscribe();
                     serverData.subscription.player.stop();
+                    serverData.subscription = null;
+                    serverData.playing = false;
+                    serverData.stopped = true;
                 }
 
                 connection.destroy();
-                if (guildId in servers) {
-                    delete servers[guildId];
-                }
 
                 const success = { content: "The bot has left your voice channel.", ephemeral: false };
 
@@ -191,9 +208,21 @@ module.exports = {
                 connection = getVoiceConnection(guildId);
             }
 
-            // Gets information from play command and appends inputted song
-            const { foundSong, stream, requester } = await generateSong(interaction);
-            serverData.queue.push({ foundSong, stream, requester });
+            // Gets information from play command and appends inputted song(s)
+            const songs = await addSongs(interaction);
+            if ('error' in songs) {
+                await interaction.editReply(songs.error);
+                return;
+            }
+
+            let successMsg;
+            if (songs.length === 1) {
+                successMsg = `Added ${songs[0].foundSong.title} to position ${serverData.queue.length + 1} in the queue.`;
+            } else {
+                successMsg = `Added ${songs.length} songs to the queue from position ${serverData.queue.length + 1}.`;
+            }
+
+            songs.forEach(data => serverData.queue.push(data));
 
             // Subscribes an audio player, if not existent
             if (!serverData.subscription) {
@@ -201,8 +230,8 @@ module.exports = {
                 const newSubscription = connection.subscribe(player);
                 serverData.subscription = newSubscription;
             }
-
-            const successMsg = `Added \`${foundSong.title}\` to position \`${serverData.queue.length}\` in the queue.`;
+            serverData.stopped = false;
+            serverData.paused = false;
 
             await interaction.editReply(successMsg);
         } else if (interaction.options.getSubcommand() === "queue") {
@@ -230,6 +259,18 @@ module.exports = {
                 });
 
                 await interaction.reply({ embeds: [queueEmbed] });
+            } else if (serverData && serverData.queue.length == 1 && (serverData.stopped === true)) {
+                const song = serverData.queue[0];
+                const queueEmbed = new EmbedBuilder({
+                    title: `Queue - 1/1`,
+                    color: successHex,
+                    fields: [{
+                        name: `1. ${song.foundSong.title}`,
+                        value: `Requested by ${song.requester}`,
+                    }],
+                });
+
+                await interaction.reply({ embeds: [queueEmbed] });
             } else {
                 const ephemeralError = { content: "There are no items to display in the queue.", ephemeral: true };
 
@@ -240,18 +281,31 @@ module.exports = {
                 serverData.subscription.player.pause();
                 serverData.subscription.connection.setSpeaking(false);
                 serverData.playing = false;
+                serverData.paused = true;
+
+                await interaction.reply("Paused music playback.");
             } else {
-                const ephemeralError = { content: "The bot cannot be paused as it is not currently playing any tracks.", ephemeral: true };
+                const ephemeralError = { content: "The song cannot be paused as the bot is not currently playing any tracks.", ephemeral: true };
 
                 await interaction.reply(ephemeralError);
             }
         } else if (interaction.options.getSubcommand() === "resume") {
             if (serverData.queue.length !== 0) {
-                if (serverData.subscription.player.checkPlayable()) {
+                if (!serverData.subscription) {
+                    const player = createAudioPlayer();
+                    const newSubscription = connection.subscribe(player);
+                    serverData.subscription = newSubscription;
+                    serverData.subscription.connection.setSpeaking(true);
+                } else if (serverData.paused && serverData.subscription.player.checkPlayable()) {
                     serverData.subscription.player.unpause();
                     serverData.subscription.connection.setSpeaking(true);
-                    serverData.playing = true;
+                    serverData.paused = false;
+                } else {
+                    serverData.stopped = false;
+                    serverData.paused = false;
                 }
+
+                await interaction.reply("Resumed playback.");
             } else {
                 const ephemeralError = { content: "The bot cannot be resumed as the queue is empty.", ephemeral: true };
 
@@ -260,17 +314,32 @@ module.exports = {
         } else if (interaction.options.getSubcommand() === "stop") {
             if (serverData.queue.length !== 0) {
                 serverData.subscription.player.stop();
+                serverData.subscription = null;
+
                 serverData.playing = false;
+                serverData.stopped = true;
+
+                serverData.queue[0].stream = await dlStream(serverData.queue[0].foundSong.url);
+
+                const player = createAudioPlayer();
+                const newSubscription = connection.subscribe(player);
+                serverData.subscription = newSubscription;
+
+                await interaction.reply("Stopped music playback.");
             } else {
-                const ephemeralError = { content: "The bot cannot be stopped as the bot is not playing anything.", ephemeral: true };
+                const ephemeralError = { content: "The song cannot be stopped as the bot is not playing anything.", ephemeral: true };
 
                 await interaction.reply(ephemeralError);
             }
         } else if (interaction.options.getSubcommand() === "clear") {
             if (serverData.queue.length !== 0) {
                 serverData.subscription.player.stop();
+                serverData.subscription = null;
                 serverData.playing = false;
+                serverData.stopped = true;
                 serverData.queue = [];
+
+                await interaction.reply("Stopped playback and cleared queue.");
             } else {
                 const ephemeralError = { content: "The queue cannot be cleared as it is already empty.", ephemeral: true };
 
@@ -287,9 +356,20 @@ module.exports = {
             }
 
             // Gets information from play command and appends inputted song
-            const { foundSong, stream, requester } = await generateSong(interaction);
-            // Adds to the second position in the queue
-            serverData.queue.splice(1, 0, { foundSong, stream, requester });
+            const songs = await addSongs(interaction);
+            if ('error' in songs) {
+                await interaction.editReply(songs.error);
+                return;
+            }
+
+            let successMsg;
+            if (songs.length === 1) {
+                successMsg = `Added ${songs[0].foundSong.title} to the start of the queue.`;
+            } else {
+                successMsg = `Added ${songs.length} songs to the start of the queue.`;
+            }
+
+            songs.reverse.forEach(data => serverData.queue.splice(1, 0, data));
 
             // Subscribes an audio player, if not existent
             if (!serverData.subscription) {
@@ -297,8 +377,9 @@ module.exports = {
                 const newSubscription = connection.subscribe(player);
                 serverData.subscription = newSubscription;
             }
+            serverData.stopped = false;
+            serverData.paused = false;
 
-            const successMsg = `Added \`${foundSong.title}\` to the start of the queue.`;
             await interaction.editReply(successMsg);
         } else if (interaction.options.getSubcommand() === "playnow") {
             await interaction.deferReply();
@@ -311,9 +392,20 @@ module.exports = {
             }
 
             // Gets information from play command and appends inputted song
-            const { foundSong, stream, requester } = await generateSong(interaction);
-            // Adds to the start of the queue
-            serverData.queue.unshift({ foundSong, stream, requester });
+            const songs = await addSongs(interaction);
+            if ('error' in songs) {
+                await interaction.editReply(songs.error);
+                return;
+            }
+
+            let successMsg;
+            if (songs.length === 1) {
+                successMsg = `Now playing ${songs[0].foundSong.title}.`;
+            } else {
+                successMsg = `Added ${songs.length} songs to the start of the queue and now playing ${songs[0].foundSong.title}.`;
+            }
+
+            songs.reverse.forEach(data => serverData.queue.unshift(data));
 
             // Subscribes an audio player, if not existent
             if (!serverData.subscription) {
@@ -321,10 +413,9 @@ module.exports = {
                 const newSubscription = connection.subscribe(player);
                 serverData.subscription = newSubscription;
             }
+            serverData.stopped = false;
+            serverData.paused = false;
 
-            serverData.playing = false;
-
-            const successMsg = `Now playing \`${foundSong.title}\`.`;
             await interaction.editReply(successMsg);
         } else if (interaction.options.getSubcommand() === "remove") {
             const index = interaction.options.getInteger("remove_pos");
@@ -384,10 +475,9 @@ module.exports = {
                 await interaction.reply(successMsg);
             }
         } else if (interaction.options.getSubcommand() === "nowplaying") {
-            const nowPlaying = serverData.queue[0];
-            const currentSong = nowPlaying.foundSong;
-
-            if (currentSong) {
+            if (serverData && serverData.queue[0]) {
+                const nowPlaying = serverData.queue[0]
+                const currentSong = serverData.queue[0].foundSong;
                 const songUrl = currentSong.url;
                 const songTitle = currentSong.title;
                 const songArtist = currentSong.author.name;
@@ -395,7 +485,6 @@ module.exports = {
                 const songLength = currentSong.duration.timestamp;
                 const requester = nowPlaying.requester;
 
-                const targetChannel = client.channels.cache.find(channel => channel.id === server.channel);
                 const playingMessage = new EmbedBuilder()
                     .setColor(successHex)
                     .setAuthor({ name: songArtist })
@@ -406,39 +495,145 @@ module.exports = {
                         { name: "Duration", value: String(songLength) },
                         { name: "Requested by", value: String(requester) },
                     );
-                const successMsg = `Moved \`${moved.title}\` from position \`${oldIndex}\` to position \`${newIndex}\` of the queue.`;
-                await interaction.reply(successMsg);
+                const successMsg = `Now playing:`;
+                await interaction.reply({content: successMsg, embeds: [playingMessage]});
             } else {
                 const successMsg = "There is no song currently playing.";
                 await interaction.reply(successMsg);
             }
+        } else if (interaction.options.getSubcommand() === "skip") {
+            if (serverData.queue.length !== 0) {
+                serverData.subscription.player.pause();
+                serverData.queue.shift();
+                serverData.playing = false;
+
+                await interaction.reply("skipped music playback.");
+            } else {
+                const ephemeralError = { content: "The song cannot be skipped as the bot is not playing anything.", ephemeral: true };
+
+                await interaction.reply(ephemeralError);
+            }
         }
-    },
+    }
 };
 
 // Fetches song details and stream from input song
-async function generateSong(interaction) {
+async function addSongs(interaction) {
+    let songsSearch = [];
+    let songs = [];
     const songInput = interaction.options.getString("song");
-    const requester = `${interaction.user.username}#${interaction.user.discriminator}`;
+    const requester = interaction.user.discriminator != 0 ? `${interaction.user.username}#${interaction.user.discriminator}` : interaction.user.username;
 
-    let songSearch;
-    if (!(songInput.includes("youtube.com") || songInput.includes("youtu.be"))) {
-        songSearch = songInput;
+    if ((songInput.includes("youtube.com") || songInput.includes("youtu.be"))) {
+        if (songInput.includes('playlist')) {
+            const res = await ytlist(songInput, 'id');
+
+            res.data.playlist.forEach(async (id) => {
+                const song = await getSong({ videoId: id});
+                if (song && !("error" in song)) songsSearch.push(song);
+            });
+        } else {
+            const song = await getSong({ videoId : songInput.match(ytIdGrab)[1] });
+            if (!song || "error" in song) return song;
+
+            songsSearch.push(song);
+        }
+    } else if (songInput.includes('open.spotify')) {
+        if (songInput.includes('track')) {
+            let res;
+            try {
+                res = await spotify.getTrack(spotifyTrackIdGrab.exec(songInput)[1]);
+            } catch (err) {
+                try {
+                    updateToken()
+                    res = await spotify.getTrack(spotifyTrackIdGrab.exec(songInput)[1]);
+                } catch (err) {
+                    if (err.body.error.message === "Not found.") {
+                        return {error : "This track could not be found."};
+                    }
+                }
+            }
+            const song = await getSong(`${res.body.name} ${res.body.artists[0].name}`);
+            if (!song || "error" in song) return song;
+
+            songsSearch.push(song);
+        } else if (songInput.includes('playlist') || songInput.includes('album')) {
+            let res;
+            try {
+                res = songInput.includes('playlist') ? 
+                await spotify.getPlaylistTracks(spotifyPlaylistIdGrab.exec(songInput)[1]) :
+                await spotify.getAlbumTracks(spotifyAlbumIdGrab.exec(songInput)[1]);
+            } catch (err) {
+                try {
+                    updateToken()
+                    res = songInput.includes('playlist') ? 
+                    await spotify.getPlaylistTracks(spotifyPlaylistIdGrab.exec(songInput)[1]) :
+                    await spotify.getAlbumTracks(spotifyAlbumIdGrab.exec(songInput)[1]);
+                } catch (err) {
+                    if (err.body.error.message === "Not found.") {
+                        return songInput.includes('playlist') ? {error : "This playlist could not be found."} :
+                        {error : "This album could not be found."};
+                    }
+                }
+            }
+
+            const results = {};
+            const playlistProcess = (item) => {
+                return new Promise((resolve) => {
+                    const searchStr = `${item.track.name} ${item.track.artists[0].name}`;
+                    getSong(searchStr).then(song => {
+                        if (song && !("error" in song)) results[searchStr] = song;
+                        resolve();
+                    })
+                });
+            }
+            const promises = res.body.items.map((item) => playlistProcess(item));
+            await Promise.all(promises);
+
+            for (item of res.body.items) {
+                const searchStr = `${item.track.name} ${item.track.artists[0].name}`;
+                if (searchStr in results) {
+                    songsSearch.push(results[searchStr]);
+                }
+            }
+        } else {
+            return {error : "Unsupported spotify link."};
+        }
     } else {
-        songSearch = { videoId : songInput.match(ytIdGrab)[1] };
+        const song = await getSong(songInput);
+        if ("error" in song) return song;
+
+        songsSearch.push(song);
     }
 
-    const output = await yts(songSearch);
-    let foundSong;
-    if (output.videos) {
-        foundSong = output.videos[0];
-    } else {
-        foundSong = output;
+    // Prepares first audio
+    if (songsSearch.length) {
+        const first = songsSearch.shift();
+        const stream = await dlStream(first.url);
+        songs.push({foundSong: first, stream, requester, url: first.url})
+
+        for (const item of songsSearch) {
+            songs.push({foundSong: item, stream: undefined, requester, url: item.url});
+        }
     }
 
-    const stream = ytdl(foundSong.url, { filter: "audioonly", dlChunkSize: 0, highWaterMark: 1 << 25 });
+    if (songs.length === 0) {
+        return {error : "No songs were found."};
+    }
 
-    return { foundSong, stream, requester };
+    return songs;
+}
+
+async function dlStream(url) {
+    return await ytdl(url, {
+        filter: 'audioonly',
+        fmt: 'mp3',
+        highWaterMark: 1 << 30,
+        liveBuffer: 20000,
+        dlChunkSize: 0,
+        bitrate: 128,
+        quality: 'lowestaudio'
+    });
 }
 
 // Commences a voice connection in an inputted voice channel
@@ -448,7 +643,16 @@ function startConnection(interaction, userVoiceChannel) {
         guildId: interaction.guildId,
         adapterCreator: interaction.guild.voiceAdapterCreator,
     });
-    servers[interaction.guildId] = { subscription: undefined, queue: [], playing: false, looped: false, channel: interaction.channelId };
+
+    servers[interaction.guildId] = {
+        subscription: undefined,
+        queue: [],
+        playing: false,
+        stopped: false,
+        paused: false,
+        looped: false,
+        channel: interaction.channelId
+    };
 }
 
 // Shuffles all items in an array excluding the first
@@ -461,3 +665,28 @@ function shuffle(array) {
     array.unshift(saved);
 }
 
+function updateToken() {
+    spotify.clientCredentialsGrant().then(
+        function(data) {
+            // Save the access token so that it's used in future calls
+            spotify.setAccessToken(data.body['access_token']);
+        },
+        function(err) {
+            console.log(
+            'Something went wrong when retrieving an access token',
+            err.message
+            );
+        }
+    );
+}
+
+async function getSong(input) {
+    const search = await yts(input);
+
+    const song = search.videos ? search.videos[0] : null;
+    if (song === null) {
+        return {error : "No song could be found with this song name."};
+    }
+
+    return song;
+}

@@ -3,3 +3,4 @@ PackMuse Discord Bot
 
 Features:
 - Youtube Songs/Search
+- Spotify Songs/Playlists
