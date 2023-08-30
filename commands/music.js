@@ -1,7 +1,6 @@
 const { joinVoiceChannel, getVoiceConnection, createAudioPlayer } = require("@discordjs/voice");
 const ytdl = require("ytdl-core-discord");
 const yts = require("yt-search");
-const ytlist = require('youtube-playlist');
 const spotifyApi = require('spotify-web-api-node');
 const { SlashCommandBuilder, EmbedBuilder, Embed } = require("discord.js");
 
@@ -12,6 +11,7 @@ const spotify = new spotifyApi({
 
 const successHex = 0x7ae378;
 const ytIdGrab = /^.*(?:(?:youtu\.be\/|v\/|vi\/|u\/\w\/|embed\/|shorts\/)|(?:(?:watch)?\?v(?:i)?=|\&v(?:i)?=))([^#\&\?]*).*/;
+const ytPlaylistIdGrab = /[?&]list=([^#\&\?]+)/;
 const spotifyTrackIdGrab = /https:\/\/open\.spotify\.com\/track\/([\w\d]+)\??/;
 const spotifyPlaylistIdGrab = /https:\/\/open\.spotify\.com\/playlist\/([\w\d]+)\??/;
 const spotifyAlbumIdGrab = /https:\/\/open\.spotify\.com\/album\/([\w\d]+)\??/;
@@ -37,22 +37,22 @@ updateToken()
 // Loop that checks if there is something in the queue when run and plays it if there is something and playing is false, otherwise waits?
 
 /** Music Features
- * - join *
- * - leave *
- * - play *
+ * - join
+ * - leave
+ * - play
  * - queue
- * - pause *
- * - resume *
- * - stop *
- * - clear *
+ * - pause
+ * - resume
+ * - stop
+ * - clear
  * - playnext
  * - playnow
  * - remove
  * - shuffle
  * - loop
  * - move
- * - nowplaying *
- * - skip *
+ * - nowplaying
+ * - skip
  */
 
 module.exports = {
@@ -174,10 +174,13 @@ module.exports = {
             // Leaves vc if in vc
             if (guildId in servers || connection) {
                 // Unsubscribes from audio player and removes, if existent
-                if (serverData && serverData.subscription !== undefined) {
-                    serverData.subscription.unsubscribe();
-                    serverData.subscription.player.stop();
-                    serverData.subscription = null;
+                if (serverData) {
+                    if (serverData.subscription) {
+                        serverData.subscription.unsubscribe();
+                        serverData.subscription.player.stop();
+                        serverData.subscription = null;
+                    }
+
                     serverData.playing = false;
                     serverData.stopped = true;
                 }
@@ -230,6 +233,7 @@ module.exports = {
                 const newSubscription = connection.subscribe(player);
                 serverData.subscription = newSubscription;
             }
+
             serverData.stopped = false;
             serverData.paused = false;
 
@@ -246,7 +250,7 @@ module.exports = {
                     reqPage = Math.max(maxPages - 1, 1);
                 }
 
-                const reqSongIndex = (reqPage - 1) * 10
+                const reqSongIndex = (reqPage - 1) * 10;
                 const queueItems = queue.slice(reqSongIndex, reqSongIndex + 10);
 
                 const queueEmbed = new EmbedBuilder({
@@ -259,7 +263,7 @@ module.exports = {
                 });
 
                 await interaction.reply({ embeds: [queueEmbed] });
-            } else if (serverData && serverData.queue.length == 1 && (serverData.stopped === true)) {
+            } else if (serverData && serverData.queue.length === 1 && serverData.stopped === true) {
                 const song = serverData.queue[0];
                 const queueEmbed = new EmbedBuilder({
                     title: `Queue - 1/1`,
@@ -278,8 +282,11 @@ module.exports = {
             }
         } else if (interaction.options.getSubcommand() === "pause") {
             if (serverData.queue.length !== 0) {
-                serverData.subscription.player.pause();
-                serverData.subscription.connection.setSpeaking(false);
+                if (serverData.subscription) {
+                    serverData.subscription.player.pause();
+                    serverData.subscription.connection.setSpeaking(false);
+                }
+
                 serverData.playing = false;
                 serverData.paused = true;
 
@@ -313,8 +320,10 @@ module.exports = {
             }
         } else if (interaction.options.getSubcommand() === "stop") {
             if (serverData.queue.length !== 0) {
-                serverData.subscription.player.stop();
-                serverData.subscription = null;
+                if (serverData.subscription) {
+                    serverData.subscription.player.stop();
+                    serverData.subscription = null;
+                }
 
                 serverData.playing = false;
                 serverData.stopped = true;
@@ -333,8 +342,10 @@ module.exports = {
             }
         } else if (interaction.options.getSubcommand() === "clear") {
             if (serverData.queue.length !== 0) {
-                serverData.subscription.player.stop();
-                serverData.subscription = null;
+                if (serverData.subscription) {
+                    serverData.subscription.player.stop();
+                    serverData.subscription = null;
+                }
                 serverData.playing = false;
                 serverData.stopped = true;
                 serverData.queue = [];
@@ -526,14 +537,25 @@ async function addSongs(interaction) {
 
     if ((songInput.includes("youtube.com") || songInput.includes("youtu.be"))) {
         if (songInput.includes('playlist')) {
-            const res = await ytlist(songInput, 'id');
+            let res;
 
-            res.data.playlist.forEach(async (id) => {
-                const song = await getSong({ videoId: id});
-                if (song && !("error" in song)) songsSearch.push(song);
-            });
+            try {
+                res = await yts({ listId: ytPlaylistIdGrab.exec(songInput)[1] });
+            } catch (err) {
+                return {error : "This playlist could not be found."};
+            }
+
+            for (const item of res.videos) {
+                songsSearch.push({
+                    url : `https://youtube.com/watch?v=${item.videoId}`,
+                    title : item.title,
+                    duration : item.duration,
+                    author : item.author,
+                    thumbnail: item.thumbnail
+                })
+            }
         } else {
-            const song = await getSong({ videoId : songInput.match(ytIdGrab)[1] });
+            const song = await getSong({ videoId : ytIdGrab.exec(songInput)[1] });
             if (!song || "error" in song) return song;
 
             songsSearch.push(song);
@@ -610,7 +632,7 @@ async function addSongs(interaction) {
     if (songsSearch.length) {
         const first = songsSearch.shift();
         const stream = await dlStream(first.url);
-        songs.push({foundSong: first, stream, requester, url: first.url})
+        songs.push({foundSong: first, stream, requester, url: first.url});
 
         for (const item of songsSearch) {
             songs.push({foundSong: item, stream: undefined, requester, url: item.url});
@@ -683,10 +705,17 @@ function updateToken() {
 async function getSong(input) {
     const search = await yts(input);
 
-    const song = search.videos ? search.videos[0] : null;
+    // First item in search if search by name, else search result for video id search
+    const song = search.videos ? search.videos[0] : search.videoId ? search : null;
     if (song === null) {
         return {error : "No song could be found with this song name."};
     }
 
-    return song;
+    return {
+        url : song.url ? song.url : `https://youtube.com/watch?v=${song.videoId}`,
+        title : song.title,
+        duration : song.duration,
+        author : song.author,
+        thumbnail: song.thumbnail
+    };
 }
