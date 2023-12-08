@@ -601,6 +601,8 @@ async function addSongs(interaction) {
 
             const results = {};
             const playlistProcess = (item) => {
+                if ('track' in item) item = item.track;
+
                 return new Promise((resolve) => {
                     const searchStr = `${item.name} ${item.artists[0].name}`;
                     getSong(searchStr).then(song => {
