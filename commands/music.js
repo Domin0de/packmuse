@@ -602,18 +602,19 @@ async function addSongs(interaction) {
             const results = {};
             const playlistProcess = (item) => {
                 return new Promise((resolve) => {
-                    const searchStr = `${item.track.name} ${item.track.artists[0].name}`;
+                    const searchStr = `${item.name} ${item.artists[0].name}`;
                     getSong(searchStr).then(song => {
                         if (song && !("error" in song)) results[searchStr] = song;
                         resolve();
                     })
                 });
             }
+
             const promises = res.body.items.map((item) => playlistProcess(item));
             await Promise.all(promises);
 
             for (item of res.body.items) {
-                const searchStr = `${item.track.name} ${item.track.artists[0].name}`;
+                const searchStr = `${item.name} ${item.artists[0].name}`;
                 if (searchStr in results) {
                     songsSearch.push(results[searchStr]);
                 }
