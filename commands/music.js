@@ -604,7 +604,7 @@ async function addSongs(interaction) {
                 if ('track' in item) item = item.track;
 
                 if (index == 0) {
-                    const song = await getSong(`${item.name} ${item.author}`);
+                    const song = await getSong(`${item.name} ${item.artists[0].name}`);
                     songsSearch.push(song);
 
                     continue;
