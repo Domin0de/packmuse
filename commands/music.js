@@ -600,9 +600,10 @@ async function addSongs(interaction) {
             }
 
             for (item of res.body.items) {
+                const index = res.body.items.indexOf(item);
                 if ('track' in item) item = item.track;
 
-                if (res.body.items.indexOf(item) == 0) {
+                if (index == 0) {
                     const song = await getSong(`${item.name} ${item.author}`);
                     songsSearch.push(song);
 
