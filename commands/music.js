@@ -599,30 +599,28 @@ async function addSongs(interaction) {
                 }
             }
 
-            const results = {};
-            const playlistProcess = (item) => {
-                if ('track' in item) item = item.track;
-
-                return new Promise((resolve) => {
-                    const searchStr = `${item.name} ${item.artists[0].name}`;
-                    getSong(searchStr).then(song => {
-                        if (song && !("error" in song)) results[searchStr] = song;
-                        resolve();
-                    })
-                });
-            }
-
-            const promises = res.body.items.map((item) => playlistProcess(item));
-            await Promise.allSettled(promises);
-
             for (item of res.body.items) {
                 if ('track' in item) item = item.track;
 
-                const searchStr = `${item.name} ${item.artists[0].name}`;
-                if (searchStr in results) {
-                    songsSearch.push(results[searchStr]);
+                if (res.body.items.indexOf(item) == 0) {
+                    const song = await getSong(`${item.name} ${item.author}`);
+                    songsSearch.push(song);
+
+                    continue;
                 }
-            }
+                duration_s = Math.round(item.duration_ms / 1000)
+
+                songsSearch.push({
+                    url: undefined,
+                    title: item.name,
+                    duration: {
+                        seconds: duration_s,
+                        timestamp: `${Math.round(duration_s / 60)}:${duration_s % 60}`
+                    },
+                    author: item.artists[0].name,
+                    thumbnail: undefined
+                });                
+            };
         } else {
             return {error : "Unsupported spotify link."};
         }
