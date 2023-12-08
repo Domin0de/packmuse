@@ -613,9 +613,11 @@ async function addSongs(interaction) {
             }
 
             const promises = res.body.items.map((item) => playlistProcess(item));
-            await Promise.all(promises);
+            await Promise.allSettled(promises);
 
             for (item of res.body.items) {
+                if ('track' in item) item = item.track;
+
                 const searchStr = `${item.name} ${item.artists[0].name}`;
                 if (searchStr in results) {
                     songsSearch.push(results[searchStr]);
